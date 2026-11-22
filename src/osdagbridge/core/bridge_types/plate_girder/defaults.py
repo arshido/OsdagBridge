@@ -179,7 +179,8 @@ def _update_typical_section_defaults(input_dict: dict) -> None:
     )
 
     def _update(key, value):
-        input_dict.update({key: value})
+        if key not in input_dict or input_dict[key] is None or input_dict[key] == "":
+            input_dict[key] = value
 
     # --- Deck Detail sub-tab ---
     _update(KEY_TS_DECK_THICKNESS,     250.0)                        # mm
@@ -261,7 +262,8 @@ def _update_loading_tab_defaults(input_dict: dict) -> None:
     """Fill Loading tab keys that are None with schema defaults."""
 
     def _update(key, value):
-        input_dict[key] = value
+        if key not in input_dict or input_dict[key] is None or input_dict[key] == "":
+            input_dict[key] = value
 
     # ── Permanent Load ─────────────────────────────────────────────────────
     _update(KEY_PL_SELF_WEIGHT_FACTOR,      "1.00")
@@ -328,7 +330,8 @@ def _update_support_conditions_defaults(input_dict: dict) -> None:
     """Fill Support Conditions tab keys that are None with schema defaults."""
     
     def _update(key, value):
-        input_dict.update({key: value})
+        if key not in input_dict or input_dict[key] is None or input_dict[key] == "":
+            input_dict[key] = value
 
     _update(KEY_SC_LEFT_SUPPORT,   "Pinned")
     _update(KEY_SC_RIGHT_SUPPORT,  "Roller")
@@ -338,7 +341,8 @@ def _update_design_options_defaults(input_dict: dict) -> None:
     """Fill Design Options tab keys that are None with schema defaults."""
     
     def _update(key, value):
-        input_dict.update({key: value})
+        if key not in input_dict or input_dict[key] is None or input_dict[key] == "":
+            input_dict[key] = value
 
     _update(KEY_DS_CONSTRUCTION_STAGE,      "Yes")
     _update(KEY_DS_REINF_BOUNDS,            {
@@ -867,7 +871,7 @@ def seed_no_of_girders(overall_width: float) -> int:
         raise ValueError("Overall bridge width must be positive.")
     return max(2, ceil(overall_width / DEFAULT_GIRDER_SPACING))
 
-def solve_extend_basic_input_dict(basic_input_dict: dict) -> None:
+def solve_extend_basic_input_dict(basic_input_dict: dict, changed_field: str = None) -> None:
     """Parse basic inputs and solve bridge layout. Updates basic_input_dict in-place."""
     from .initial_sizing import BridgeConfigurationSolver
 
@@ -916,7 +920,36 @@ def solve_extend_basic_input_dict(basic_input_dict: dict) -> None:
         basic_input_dict.get(KEY_TS_NO_OF_GIRDERS)
         or seed_no_of_girders(solver.calculate_overall_bridge_width())
     )
-    sizing_result = solver._solve_layout(no_of_girders=no_of_girders, changed_field='girders')
+    spacing_val = basic_input_dict.get(KEY_TS_GIRDER_SPACING)
+    try:
+        spacing_float = float(spacing_val) if spacing_val is not None and spacing_val != "" else 0.0
+    except (ValueError, TypeError):
+        spacing_float = 0.0
+
+    field_to_use = changed_field
+    if field_to_use is None:
+        if spacing_float > 0.0:
+            field_to_use = "spacing"
+        else:
+            field_to_use = "girders"
+
+    if field_to_use == "spacing" and spacing_float > 0.0:
+        try:
+            sizing_result = solver._solve_layout(
+                no_of_girders=no_of_girders,
+                girder_spacing=spacing_float,
+                changed_field="spacing"
+            )
+        except Exception:
+            sizing_result = solver._solve_layout(
+                no_of_girders=no_of_girders,
+                changed_field="girders"
+            )
+    else:
+        sizing_result = solver._solve_layout(
+            no_of_girders=no_of_girders,
+            changed_field="girders"
+        )
 
     print("[DEBUG] Bridge Layout Sizing Result:")
     print(f"  overall_width = {sizing_result.overall_width} m")

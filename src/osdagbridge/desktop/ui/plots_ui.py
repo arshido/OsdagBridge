@@ -128,7 +128,7 @@ class SummaryDialog(QDialog):
 
         self.table = QTableWidget()
         self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["Girder", "Max (N mm)", "Min (N mm)"])
+        self.table.setHorizontalHeaderLabels(["Member", "Max (N mm)", "Min (N mm)"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(self.table)
 
@@ -165,6 +165,13 @@ class PlotWidget(QWidget):
         self.combo = QComboBox()
         self.combo.currentTextChanged.connect(self.update_plot)
         top.addWidget(self.combo)
+
+        # ---------- MEMBER ----------
+        top.addWidget(QLabel("Member:"))
+        self.member_combo = QComboBox()
+        self.member_combo.addItems(["All", "All Transverse", "End Diaphragms", "Intermediate Cross Bracings"])
+        self.member_combo.currentTextChanged.connect(self.update_plot)
+        top.addWidget(self.member_combo)
 
         # ---------- FORCE ----------
         top.addWidget(QLabel("Force:"))
@@ -219,6 +226,20 @@ class PlotWidget(QWidget):
         self.combo.addItems(loadcases)
         self.combo.blockSignals(False)
 
+        self.member_combo.blockSignals(True)
+        self.member_combo.clear()
+        z_tol = 3
+        node_z = {int(n): round(float(coord[2]), z_tol) for n, coord in nodes.items()}
+        girder_zs = set()
+        for ele, (n1, n2) in members.items():
+            if node_z.get(int(n1)) == node_z.get(int(n2)):
+                girder_zs.add(node_z[int(n1)])
+        n_girders = len(girder_zs)
+        girder_items = [f"G{i+1}" for i in range(n_girders)] if n_girders > 0 else []
+        member_items = ["All"] + girder_items + ["All Transverse", "End Diaphragms", "Intermediate Cross Bracings"]
+        self.member_combo.addItems(member_items)
+        self.member_combo.blockSignals(False)
+
     def show_summary_dialog(self):
         """Pops up the dialog perfectly in the top-left corner of the web view."""
         if not self.stats_dict:
@@ -238,27 +259,19 @@ class PlotWidget(QWidget):
             return
 
         loadcase = self.combo.currentText()
+        selected_member = self.member_combo.currentText() if hasattr(self, 'member_combo') and self.member_combo.currentText() else "All"
         force_key = self.force_combo.currentText()
         ds = self._ds_all.sel(Loadcase=loadcase)
 
-        is_force = force_key.startswith("F") 
-        is_moment = force_key.startswith("M") 
+        is_force = force_key.startswith("F") or force_key.startswith("V")
+        is_moment = force_key.startswith("M") or force_key.startswith("T")
 
         if is_force:
-            # self.contour.blockSignals(True)   # commented out
-            # self.contour.setChecked(False)    # commented out
-            # self.contour.setEnabled(False)    # commented out
-            # self.contour.blockSignals(False)  # commented out
             self.stats_dict = {}
-            plot_json = build_figure_sfd(ds, force_key, self._nodes, self._members)
+            plot_json = build_figure_sfd(ds, force_key, self._nodes, self._members, selected_member=selected_member)
 
         elif is_moment:
-            # self.contour.setEnabled(True)     # commented out
-            # if self.contour.isChecked():      # commented out
-            #     plot_json = build_figure_bmd_contour(ds, force_key, self._nodes, self._members)
-            #     self.stats_dict = {}
-            # else:
-            plot_json, self.stats_dict = build_figure_bmd(ds, force_key, self._nodes, self._members)
+            plot_json, self.stats_dict = build_figure_bmd(ds, force_key, self._nodes, self._members, selected_member=selected_member)
 
             if self.summary_dialog.isVisible():
                 self.summary_dialog.update_data(self.stats_dict)

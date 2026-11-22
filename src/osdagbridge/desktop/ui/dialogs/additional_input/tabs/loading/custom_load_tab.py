@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from osdagbridge.desktop.ui.dialogs.tabs.common import apply_field_style
 from osdagbridge.desktop.ui.dialogs.custom_messagebox import CustomMessageBox, MessageBoxType
 from osdagbridge.core.bridge_types.plate_girder.ui_fields_additional_input import CUSTOM_LOAD_TAB_SCHEMA
+from osdagbridge.core.utils.common import KEY_ADD_CUSTOM_LOAD_CASE, KEY_ADD_CUSTOM_LOAD_CASE_NAME
 
 
 class CustomLoadTab(QWidget):
@@ -111,6 +112,7 @@ class CustomLoadTab(QWidget):
         lbl.setFixedWidth(label_width)
         
         owner.custom_load_case_combo = QComboBox()
+        owner.custom_load_case_combo.setObjectName(KEY_ADD_CUSTOM_LOAD_CASE)
         owner.custom_load_case_combo.addItems(schema["load_case_choices"])
         owner.custom_load_case_combo.setFixedWidth(field_width)
         apply_field_style(owner.custom_load_case_combo)
@@ -120,6 +122,7 @@ class CustomLoadTab(QWidget):
         
         custom_name_field = schema["fields"]["custom_load_case_name"]
         owner.custom_load_case_name_input = QLineEdit()
+        owner.custom_load_case_name_input.setObjectName(KEY_ADD_CUSTOM_LOAD_CASE_NAME)
         owner.custom_load_case_name_input.setPlaceholderText(custom_name_field["placeholder"])
         owner.custom_load_case_name_input.setFixedWidth(field_width)
         owner.custom_load_case_name_input.setEnabled(custom_name_field["enabled"])
@@ -593,6 +596,8 @@ class CustomLoadTab(QWidget):
         
         self._clear_inputs()
         self._refresh_custom_load_table()
+        if hasattr(owner, "set_modified"):
+            owner.set_modified(True)
         
         CustomMessageBox(title="Saved", text="Custom load has been saved.", buttons=["OK"], dialogType=MessageBoxType.Success).exec()
 
@@ -649,6 +654,8 @@ class CustomLoadTab(QWidget):
                 del self.custom_load_items[row_idx]
         
         self._refresh_custom_load_table()
+        if hasattr(owner, "set_modified"):
+            owner.set_modified(True)
         
         CustomMessageBox(title="Deleted", text=f"{len(rows_to_delete)} custom load(s) deleted.", buttons=["OK"], dialogType=MessageBoxType.Information).exec()
 

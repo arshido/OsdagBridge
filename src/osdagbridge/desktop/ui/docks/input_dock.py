@@ -11,6 +11,7 @@ Design principles:
     the ui_config_dict declared in frontend_data.input_values().
 """
 
+from __future__ import annotations
 import json
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton,
@@ -1082,6 +1083,75 @@ class InputDock(QWidget):
         # runs on the next Design call and derives all computed defaults.
         self.is_require_field_changed = True
         self.input_value_changed.emit()
+
+    def flash_field(self, key: str):
+        """
+        Briefly flashes a visual highlight on the specified input field
+        when updated from the 2D CAD canvas.
+        """
+        w = self._w(key)
+        if not w:
+            return
+
+        # Store original stylesheet if not already stored
+        if not hasattr(w, "_orig_flash_style"):
+            w._orig_flash_style = w.styleSheet()
+
+        # Stop any existing restore timer
+        if hasattr(w, "_flash_timer") and w._flash_timer is not None:
+            w._flash_timer.stop()
+
+        # Highlight style: gentle light green background with primary green border
+        if isinstance(w, QLineEdit):
+            highlight_style = """
+                QLineEdit {
+                    padding: 1px 7px;
+                    border: 2px solid #90AF13;
+                    border-radius: 6px;
+                    background-color: #E8F5D0;
+                    color: #000000;
+                    font-weight: bold;
+                }
+            """
+        elif isinstance(w, QComboBox):
+            highlight_style = """
+                QComboBox {
+                    padding: 1px 7px;
+                    border: 2px solid #90AF13;
+                    border-radius: 5px;
+                    background-color: #E8F5D0;
+                    color: black;
+                    font-weight: bold;
+                }
+                QComboBox::drop-down {
+                    subcontrol-origin: padding;
+                    subcontrol-position: top right;
+                    border-left: 0px;
+                }
+                QComboBox::down-arrow {
+                    image: url(:/vectors/arrow_down_light.svg);
+                    width: 20px;
+                    height: 20px;
+                    margin-right: 8px;
+                }
+            """
+        else:
+            highlight_style = w.styleSheet()
+
+        w.setStyleSheet(highlight_style)
+
+        def restore_style():
+            if hasattr(w, "_orig_flash_style"):
+                w.setStyleSheet(w._orig_flash_style)
+                delattr(w, "_orig_flash_style")
+            if hasattr(w, "_flash_timer"):
+                delattr(w, "_flash_timer")
+
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(restore_style)
+        w._flash_timer = timer
+        timer.start(700)
 
     # ══════════════════════════════════════════════════════════════════════════
     # Utilities

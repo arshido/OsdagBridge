@@ -977,6 +977,45 @@ KEY_FOOTPATH_CLEAR_MIN_WIDTH = 1500
 
 KEY_MP_GIRDER_WEB_DEPTH = "member_properties.girder_details.section_input.web_depth"
 
+# Additional Inputs - Custom load keys
+KEY_ADD_CUSTOM_LOAD_CASE      = "custom_load_case"
+KEY_ADD_CUSTOM_LOAD_CASE_NAME = "custom_load_case_name"
+
+# Additional Inputs - Canonical parameter display names mapping (Key-driven architecture)
+ADDITIONAL_INPUTS_PARAM_NAMES = {
+    KEY_CB_WIDTH: "Crash Barrier Width",
+    KEY_CB_HEIGHT: "Crash Barrier Height",
+    KEY_CB_LOAD: "Crash Barrier Load",
+    KEY_CB_DENSITY: "Crash Barrier Density",
+    KEY_CB_AREA: "Crash Barrier Area",
+    KEY_MD_WIDTH: "Median Width",
+    KEY_MD_HEIGHT: "Median Height",
+    KEY_MD_LOAD: "Median Load",
+    KEY_MD_DENSITY: "Median Density",
+    KEY_MD_AREA: "Median Area",
+    KEY_RL_WIDTH: "Railing Width",
+    KEY_RL_HEIGHT: "Railing Height",
+    KEY_RL_LOAD_VALUE: "Railing Load",
+    KEY_WC_DENSITY: "Wearing Course Density",
+    KEY_LL_FOOTPATH_PRESSURE_VALUE: "Footpath Pressure",
+    KEY_SL_DEAD_LOAD_VALUE: "Dead Load for Seismic Force",
+    KEY_SL_LIVE_LOAD_VALUE: "Live Load for Seismic Force",
+    KEY_WL_GUST_FACTOR_VALUE: "Gust Factor",
+    KEY_WL_DRAG_COEFF_VALUE: "Drag Coefficient",
+    KEY_WL_DRAG_COEFF_LL_VALUE: "Drag Coefficient against Live Load",
+    KEY_WL_LIFT_COEFF_VALUE: "Lift Coefficient",
+    KEY_WL_SUPER_AREA_ELEV_VALUE: "Superstructure Area in Elevation",
+    KEY_WL_SUPER_AREA_PLAIN_VALUE: "Superstructure Area in Plain",
+    KEY_WL_EXPOSED_FRONTAL_VALUE: "Exposed Frontal Area of Live Load",
+    KEY_WL_WIND_ECC_DECK_VALUE: "Wind Load Eccentricity from Top of Deck",
+    KEY_WL_WIND_LL_ECC_VALUE: "Wind on Live Load Eccentricity from Top of Deck",
+    KEY_DO_CAMBER_VALUE: "Camber",
+    KEY_MP_GIRDER_DEPTH: "Total Depth",
+    KEY_MP_GIRDER_TOP_FLANGE_WIDTH: "Width of Top Flange",
+    KEY_MP_GIRDER_BOTTOM_FLANGE_WIDTH: "Width of Bottom Flange",
+    KEY_ADD_CUSTOM_LOAD_CASE_NAME: "Custom Load Case Name",
+}
+
 
 
 

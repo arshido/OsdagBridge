@@ -142,14 +142,14 @@ class SummaryOverlay(QFrame):
             title += f" ({unit})"
         hud_text = f"<b>{title}</b><br>" + "-" * 38 + "<br>"
 
-        h_girder = "Girder".ljust(8).replace(" ", "&nbsp;")
+        h_girder = "Member".ljust(12).replace(" ", "&nbsp;")
         h_max = "Max".rjust(10).replace(" ", "&nbsp;")
         h_min = "Min".rjust(12).replace(" ", "&nbsp;")
         
-        hud_text += f"<b>{h_girder}</b> | <span style='color: #FF4136;'><b>{h_max}</b></span> | <span style='color: #00E5FF;'><b>{h_min}</b></span><br>" + "-" * 38 + "<br>"
+        hud_text += f"<b>{h_girder}</b> | <span style='color: #FF4136;'><b>{h_max}</b></span> | <span style='color: #00E5FF;'><b>{h_min}</b></span><br>" + "-" * 42 + "<br>"
 
         for girder, vals in summary_data.items():
-            g_str = girder.ljust(8).replace(" ", "&nbsp;")
+            g_str = girder.ljust(12).replace(" ", "&nbsp;")
             max_str = f"{vals['max']:.2f}".rjust(10).replace(" ", "&nbsp;")
             min_str = f"{vals['min']:.2f}".rjust(12).replace(" ", "&nbsp;")
             

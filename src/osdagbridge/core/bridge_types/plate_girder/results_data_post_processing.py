@@ -1,3 +1,4 @@
+from __future__ import annotations
 import math
 
 
@@ -367,10 +368,14 @@ def attach_crossbracings(data, member_ids, members_dict, node_coords):
 OUTPUT_KEYS = [
     "nodes",
     "members",
+    "groups",
     "loadcases",
     "transverse_slab",
     "longitudinal_members",
     "transverse_members",
+    "end_diaphragms",
+    "intermediate_cross_bracings",
+    "transverse_results",
     "girders",
     "crossbracings",
     "forces",
@@ -433,5 +438,12 @@ def post_process(data: dict) -> dict:
     rebuild_components(data)
     attach_girders(data)
     attach_crossbracings(data, cb_raw_ids, members_dict, node_coords)
+
+    if "transverse_results" not in data:
+        try:
+            from .results_data import extract_transverse_results
+            data["transverse_results"] = extract_transverse_results(data)
+        except Exception:
+            pass
 
     return {k: data[k] for k in OUTPUT_KEYS if k in data}

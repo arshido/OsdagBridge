@@ -4,6 +4,8 @@ Takes dimensions from IRC5_2015 and computes areas only.
 
 @author: Sweta Pal
 """
+from __future__ import annotations
+from typing import Optional
 from osdagbridge.core.utils.common import *
 from osdagbridge.core.utils.codes.irc5_2015 import IRC5_2015
 from osdagbridge.core.utils.codes.keyfile import (

@@ -20,6 +20,7 @@ ui_config_dict extra keys for analysis fields:
     group_end   : bool — closes the current nested group after this field.
     exclusive   : bool — for checkbox types; only one can be checked at a time.
     """
+from __future__ import annotations
 import os
 import logging
 
@@ -863,7 +864,8 @@ class OutputDock(QWidget):
         if combo_analysis is not None:
             combo_analysis.blockSignals(True)
             combo_analysis.clear()
-            combo_analysis.addItems(["All"] + items)
+            transverse_items = ["All Transverse", "End Diaphragms", "Intermediate Cross Bracings"]
+            combo_analysis.addItems(["All"] + items + transverse_items)
             combo_analysis.setCurrentIndex(0)
             combo_analysis.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             combo_analysis.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)

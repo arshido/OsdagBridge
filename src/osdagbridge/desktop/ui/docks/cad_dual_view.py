@@ -5,7 +5,7 @@ Author: Arushi
 """
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QSplitter, QScrollArea, QHBoxLayout, QPushButton, QLabel
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, Signal
 from .cad_cross_section import CrossSectionCADWidget
 from .cad_top_view import TopViewCADWidget
 from osdagbridge.core.utils.common import *
@@ -17,6 +17,7 @@ from osdagbridge.desktop.cad.irc5_geometry import (
 
 class BridgeDualCADWidget(QWidget):
     """Split view widget showing both cross-section and top view with individual controls"""
+    cad_param_edited = Signal(str, str)  # (param_key, new_value_str)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -70,6 +71,10 @@ class BridgeDualCADWidget(QWidget):
         self.top_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         
         self.splitter.addWidget(self.top_scroll)
+
+        # Relay CAD inline editing signals upward
+        self.cross_section_widget.cad_param_edited.connect(self.cad_param_edited.emit)
+        self.top_view_widget.cad_param_edited.connect(self.cad_param_edited.emit)
         
         # Set equal sizes for both views
         self.splitter.setStretchFactor(0, 1)
@@ -147,7 +152,7 @@ class BridgeDualCADWidget(QWidget):
         )
         self.top_view_widget.update()
     
-    def update_from_osdag_inputs(self, input_dict):
+    def update_from_osdag_inputs(self, input_dict, force: bool = False):
         """
         Update CAD from OsdagBridge input fields
         Maps from OsdagBridge common.py KEY_* fields to CAD widget parameters
@@ -321,20 +326,22 @@ class BridgeDualCADWidget(QWidget):
                         elif "barrier_height" in geom:
                             params[KEY_MD_HEIGHT] = geom["barrier_height"]
         
-        # Propagate only keys that actually changed to avoid unnecessary redraw/zoom resets.
+        # Propagate changed keys (or all keys if forced) to avoid unnecessary redraw/zoom resets.
         changed_params = {
             k: v for k, v in params.items()
-            if self._last_mapped_params.get(k) != v
+            if force or self._last_mapped_params.get(k) != v
         }
-        if not changed_params:
+        if not changed_params and not force:
             return
 
-        self._last_mapped_params.update(changed_params)
+        self._last_mapped_params.update(params)
 
         # Span length only affects the top view plan geometry; avoid cross-section retriggers.
-        cross_section_params = {k: v for k, v in changed_params.items() if k != 'span_length'}
+        cross_section_params = {k: v for k, v in (params if force else changed_params).items() if k != 'span_length'}
 
         if cross_section_params:
             self.cross_section_widget.update_params(cross_section_params)
-        self.top_view_widget.update_params(changed_params)
+        self.top_view_widget.update_params(params if force else changed_params)
+        self.cross_section_widget.update()
+        self.top_view_widget.update()
         

@@ -10,6 +10,7 @@ bridge-wrapper dependency.
 
 from __future__ import annotations
 import json
+import math
 from collections import OrderedDict
 from collections.abc import Mapping
 from pathlib import Path
@@ -92,6 +93,265 @@ def _build_nodes_members() -> tuple[dict, dict]:
         for e in ops.getEleTags()
     }
     return nodes, members
+
+
+def classify_transverse_members(nodes: dict, members: dict, groups: dict | None = None) -> dict:
+    """
+    Distinguish longitudinal girder elements from transverse elements,
+    and accurately categorize transverse elements into End Diaphragms and Intermediate Cross Bracings.
+
+    Parameters
+    ----------
+    nodes   : dict — {node_tag: [x, y, z]}
+    members : dict — {ele_tag: [n1, n2]}
+    groups  : dict, optional — standard member groups from OspGrillage model
+              (e.g., "start_edge", "end_edge", "transverse_slab")
+
+    Returns
+    -------
+    dict:
+        "longitudinal": list[int]
+        "transverse": list[int]
+        "end_diaphragms": list[int]
+        "intermediate_cross_bracings": list[int]
+        "start_edge": list[int]
+        "end_edge": list[int]
+    """
+    _z_tol = 1e-3
+    longitudinal_members: list[int] = []
+    transverse_members: list[int] = []
+
+    nodes_norm = {int(k): list(map(float, v)) for k, v in nodes.items()}
+    members_norm = {int(k): list(map(int, v)) for k, v in members.items()}
+
+    for tag, (n1, n2) in members_norm.items():
+        if n1 not in nodes_norm or n2 not in nodes_norm:
+            continue
+        c1, c2 = nodes_norm[n1], nodes_norm[n2]
+        # In a grillage, longitudinal members run along span (same lateral Z)
+        if abs(c1[2] - c2[2]) < _z_tol and abs(c1[1] - c2[1]) < _z_tol:
+            longitudinal_members.append(tag)
+        else:
+            transverse_members.append(tag)
+
+    groups = groups or {}
+    start_edge_grp = [int(e) for e in groups.get("start_edge", []) if int(e) in members_norm]
+    end_edge_grp = [int(e) for e in groups.get("end_edge", []) if int(e) in members_norm]
+    trans_slab_grp = [int(e) for e in groups.get("transverse_slab", []) if int(e) in members_norm]
+
+    if start_edge_grp or end_edge_grp:
+        start_edge = start_edge_grp
+        end_edge = end_edge_grp
+        end_diaphragms = sorted(list(set(start_edge + end_edge)))
+        intermediate_cb = [e for e in trans_slab_grp if e not in end_diaphragms]
+        for e in transverse_members:
+            if e not in end_diaphragms and e not in intermediate_cb:
+                intermediate_cb.append(e)
+    else:
+        # Fallback to geometry: cluster transverse elements by their longitudinal position (x_mid)
+        if not transverse_members:
+            start_edge, end_edge, end_diaphragms, intermediate_cb = [], [], [], []
+        else:
+            x_mids = {}
+            for tag in transverse_members:
+                n1, n2 = members_norm[tag]
+                x_mids[tag] = (nodes_norm[n1][0] + nodes_norm[n2][0]) / 2.0
+
+            unique_x = sorted(set(round(x, 2) for x in x_mids.values()))
+            if len(unique_x) <= 2:
+                # 0, 1, or 2 transverse lines: all are end diaphragms (zero intermediate cross bracings)
+                if len(unique_x) == 1:
+                    start_edge = transverse_members
+                    end_edge = []
+                else:
+                    x0, x1 = unique_x[0], unique_x[-1]
+                    start_edge = [t for t in transverse_members if abs(x_mids[t] - x0) <= 0.05]
+                    end_edge = [t for t in transverse_members if abs(x_mids[t] - x1) <= 0.05]
+                end_diaphragms = sorted(list(set(start_edge + end_edge)))
+                intermediate_cb = []
+            else:
+                x0, x_last = unique_x[0], unique_x[-1]
+                start_edge = [t for t in transverse_members if abs(x_mids[t] - x0) <= 0.05]
+                end_edge = [t for t in transverse_members if abs(x_mids[t] - x_last) <= 0.05]
+                end_diaphragms = sorted(list(set(start_edge + end_edge)))
+                intermediate_cb = [t for t in transverse_members if t not in end_diaphragms]
+
+    return {
+        "longitudinal": longitudinal_members,
+        "transverse": transverse_members,
+        "all_transverse": transverse_members,
+        "end_diaphragms": end_diaphragms,
+        "intermediate_cross_bracings": intermediate_cb,
+        "start_edge": start_edge,
+        "end_edge": end_edge,
+    }
+
+
+def extract_transverse_results(data: dict) -> dict:
+    """
+    Extract internal forces and nodal displacements (Fx, Vy, Vz, Tx, My, Mz, Dx, Dy, Dz)
+    for transverse elements across all load cases and load combinations.
+
+    Returns
+    -------
+    dict:
+        "end_diaphragms": list[int]
+        "intermediate_cross_bracings": list[int]
+        "all_transverse": list[int]
+        "elements": dict[str, dict]
+            Mapping of element_id to geometric details, category, and per-loadcase results:
+            forces (Fx, Vy, Vz, Tx, My, Mz in kN/kNm) and displacements (Dx, Dy, Dz in mm).
+        "by_loadcase": dict[str, dict]
+            Mapping of loadcase to forces and displacements.
+    """
+    nodes = data.get("nodes", {})
+    members = data.get("members", {})
+    forces = data.get("forces", {})
+    displacements = data.get("displacements", {})
+    loadcases = data.get("loadcases")
+    if loadcases is None:
+        if hasattr(forces, "coords") and "Loadcase" in forces.coords:
+            loadcases = list(forces.coords["Loadcase"].values)
+        elif hasattr(forces, "keys"):
+            loadcases = list(forces.keys())
+        elif hasattr(displacements, "coords") and "Loadcase" in displacements.coords:
+            loadcases = list(displacements.coords["Loadcase"].values)
+        elif hasattr(displacements, "keys"):
+            loadcases = list(displacements.keys())
+        else:
+            loadcases = []
+
+    groups = data.get("groups", {})
+
+    classified = classify_transverse_members(nodes, members, groups)
+    end_diaphragms = classified["end_diaphragms"]
+    intermediate_cbs = classified["intermediate_cross_bracings"]
+    all_transverse = classified["transverse"]
+
+    force_field_map = {
+        "Fx": ("Vx_i", "Vx_j"),
+        "Vy": ("Vy_i", "Vy_j"),
+        "Vz": ("Vz_i", "Vz_j"),
+        "Tx": ("Mx_i", "Mx_j"),
+        "My": ("My_i", "My_j"),
+        "Mz": ("Mz_i", "Mz_j"),
+    }
+    disp_field_map = {
+        "Dx": ("x", "dx", "Dx"),
+        "Dy": ("y", "dy", "Dy"),
+        "Dz": ("z", "dz", "Dz"),
+    }
+
+    elements_data = {}
+    by_loadcase = {str(lc): {"forces": {}, "displacements": {}} for lc in loadcases}
+
+    for ele_tag in all_transverse:
+        tag_str = str(ele_tag)
+        if tag_str not in members and ele_tag not in members:
+            continue
+        n1, n2 = members.get(tag_str) or members.get(ele_tag)
+        c1 = nodes.get(str(n1)) or nodes.get(n1)
+        c2 = nodes.get(str(n2)) or nodes.get(n2)
+        if not c1 or not c2:
+            continue
+
+        cat = (
+            "End Diaphragm" if ele_tag in end_diaphragms
+            else "Intermediate Cross Bracing" if ele_tag in intermediate_cbs
+            else "Transverse"
+        )
+
+        dx = c2[0] - c1[0]
+        dy = c2[1] - c1[1]
+        dz = c2[2] - c1[2]
+        length = round(math.sqrt(dx * dx + dy * dy + dz * dz), 4)
+
+        elem_entry = {
+            "element_tag": ele_tag,
+            "category": cat,
+            "nodes": [n1, n2],
+            "coords_i": list(c1),
+            "coords_j": list(c2),
+            "length": length,
+            "loadcases": {},
+        }
+
+        for lc in loadcases:
+            lc_str = str(lc)
+            f_vals = {}
+            for comp_name, (ci, cj) in force_field_map.items():
+                vi, vj = None, None
+                if hasattr(forces, "sel"):
+                    try:
+                        vi = float(forces.sel(Loadcase=lc, Element=ele_tag, Component=ci).values)
+                    except Exception:
+                        pass
+                    try:
+                        vj = float(forces.sel(Loadcase=lc, Element=ele_tag, Component=cj).values)
+                    except Exception:
+                        pass
+                elif hasattr(forces, "get"):
+                    lc_forces = forces.get(lc_str, {}) or forces.get(lc, {})
+                    elem_f = lc_forces.get(tag_str, {}) or lc_forces.get(ele_tag, {})
+                    vi = elem_f.get(ci)
+                    vj = elem_f.get(cj)
+
+                vi_kn = round(vi / 1000.0, 4) if vi is not None else None
+                vj_kn = round(vj / 1000.0, 4) if vj is not None else None
+                f_vals[comp_name] = {"i": vi_kn, "j": vj_kn}
+
+            d_vals_i = {}
+            d_vals_j = {}
+            for comp_name, fields in disp_field_map.items():
+                di, dj = None, None
+                if hasattr(displacements, "sel"):
+                    for f in fields:
+                        if di is None:
+                            try:
+                                di = float(displacements.sel(Loadcase=lc, Node=n1, Component=f).values)
+                            except Exception:
+                                pass
+                        if dj is None:
+                            try:
+                                dj = float(displacements.sel(Loadcase=lc, Node=n2, Component=f).values)
+                            except Exception:
+                                pass
+                elif hasattr(displacements, "get"):
+                    lc_disp = displacements.get(lc_str, {}) or displacements.get(lc, {})
+                    disp_i = lc_disp.get(str(n1), {}) or lc_disp.get(n1, {})
+                    disp_j = lc_disp.get(str(n2), {}) or lc_disp.get(n2, {})
+                    di = next((disp_i.get(f) for f in fields if f in disp_i), None)
+                    dj = next((disp_j.get(f) for f in fields if f in disp_j), None)
+
+                di_mm = round(di * 1000.0, 4) if di is not None else None
+                dj_mm = round(dj * 1000.0, 4) if dj is not None else None
+                d_vals_i[comp_name] = di_mm
+                d_vals_j[comp_name] = dj_mm
+
+            elem_entry["loadcases"][lc_str] = {
+                "forces": f_vals,
+                "displacements_i": d_vals_i,
+                "displacements_j": d_vals_j,
+            }
+
+            by_loadcase[lc_str]["forces"][ele_tag] = f_vals
+            if n1 not in by_loadcase[lc_str]["displacements"]:
+                by_loadcase[lc_str]["displacements"][n1] = d_vals_i
+            if n2 not in by_loadcase[lc_str]["displacements"]:
+                by_loadcase[lc_str]["displacements"][n2] = d_vals_j
+
+        elements_data[str(ele_tag)] = elem_entry
+
+    res = {
+        "end_diaphragms": end_diaphragms,
+        "intermediate_cross_bracings": intermediate_cbs,
+        "all_transverse": all_transverse,
+        "elements": elements_data,
+        "by_loadcase": by_loadcase,
+    }
+    for lc, lc_dict in by_loadcase.items():
+        res[lc] = lc_dict
+    return res
 
 
 def dump_full_data(
@@ -408,18 +668,12 @@ def _build_full_data(model, edge_dist: float = 0.0, dataset=None, lazy: bool = F
     disp_components = [str(
         c) for c in ds0["displacements"].coords["Component"].values] if "displacements" in ds0.data_vars else []
 
-    # Classify members: longitudinal = both nodes share same Z and same Y
-    _z_tol = 1e-3
-    longitudinal_members = []
-    transverse_members = []
-    for tag, (n1, n2) in members.items():
-        if n1 not in nodes or n2 not in nodes:
-            continue
-        if (abs(nodes[n1][2] - nodes[n2][2]) < _z_tol and
-                abs(nodes[n1][1] - nodes[n2][1]) < _z_tol):
-            longitudinal_members.append(tag)
-        else:
-            transverse_members.append(tag)
+    # Classify members: longitudinal vs transverse, and categorize End Diaphragms vs Intermediate Cross Bracings
+    classified = classify_transverse_members(nodes, members, groups)
+    longitudinal_members = classified["longitudinal"]
+    transverse_members = classified["transverse"]
+    end_diaphragms = classified["end_diaphragms"]
+    intermediate_cross_bracings = classified["intermediate_cross_bracings"]
 
     data: dict = {
         "nodes": {str(k): list(v) for k, v in nodes.items()},
@@ -427,6 +681,8 @@ def _build_full_data(model, edge_dist: float = 0.0, dataset=None, lazy: bool = F
         "groups": groups,
         "longitudinal_members": longitudinal_members,
         "transverse_members": transverse_members,
+        "end_diaphragms": end_diaphragms,
+        "intermediate_cross_bracings": intermediate_cross_bracings,
         "edge_dist": float(edge_dist),
         "loadcases": list(loadcases),
         "force_components": force_components,
@@ -506,6 +762,7 @@ def _build_full_data(model, edge_dist: float = 0.0, dataset=None, lazy: bool = F
                 for e, row in zip(eids, arr)
             }
 
+    data["transverse_results"] = extract_transverse_results(data)
     return data
 
 

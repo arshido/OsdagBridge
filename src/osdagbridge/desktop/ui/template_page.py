@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os, yaml
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -787,7 +788,81 @@ class CustomWindow(QWidget):
         # Connect to input dock's value changed signals
         # This will update the CAD whenever any input field changes
         if hasattr(self.input_dock, 'input_value_changed'):
-            self.input_dock.input_value_changed.connect(self.update_cad_from_inputs)        
+            self.input_dock.input_value_changed.connect(self.update_cad_from_inputs)
+
+        # Connect CAD inline parameter edits back to inputs and UI
+        if hasattr(self.cad_comp_widget, 'cad_param_edited'):
+            self.cad_comp_widget.cad_param_edited.connect(self._on_cad_param_edited_from_canvas)
+
+    def _on_cad_param_edited_from_canvas(self, key: str, value: str):
+        """
+        Handler for parameter edits triggered directly on the 2D CAD canvas.
+        Synchronizes input_dict, input_dock widgets, additional inputs,
+        re-derives dependent parameters, and triggers a CAD redraw.
+        """
+        # Parse numeric value
+        try:
+            val_float = float(value)
+            val_num = int(val_float) if val_float.is_integer() and key in (KEY_TS_DECK_THICKNESS, KEY_TS_NO_OF_GIRDERS) else val_float
+        except (ValueError, TypeError):
+            val_float = None
+            val_num = value
+
+        # 1. Update the parent input_dict
+        self.input_dict[key] = val_num
+
+        # 2. Update and flash corresponding input_dock widget if it exists
+        if self.input_dock:
+            w = self.input_dock._w(key)
+            if w is not None:
+                w.blockSignals(True)
+                if isinstance(w, QLineEdit):
+                    w.setText(str(value))
+                elif isinstance(w, QComboBox):
+                    w.setCurrentText(str(value))
+                w.blockSignals(False)
+                self.input_dock.flash_field(key)
+
+        # 3. Synchronize additional inputs dialog if constructed
+        if getattr(self, "_additional_inputs_dialog", None) is not None:
+            try:
+                dlg = self._additional_inputs_dialog
+                if hasattr(dlg, "working_input_dict"):
+                    dlg.working_input_dict[key] = val_num
+                if hasattr(dlg, "default_input_dict"):
+                    dlg.default_input_dict[key] = val_num
+                w = dlg.findChild(QLineEdit, key)
+                if w is not None:
+                    w.blockSignals(True)
+                    w.setText(str(value))
+                    w.blockSignals(False)
+            except Exception:
+                pass
+
+        # 4. Mark require field changed and re-solve derived values
+        if self.input_dock:
+            self.input_dock.is_require_field_changed = True
+
+        changed_field = "spacing" if key == KEY_TS_GIRDER_SPACING else ("girders" if key == KEY_CARRIAGEWAY_WIDTH else None)
+        try:
+            solve_extend_basic_input_dict(self.input_dict, changed_field=changed_field)
+        except Exception:
+            pass
+
+        # Re-sync derived layout values (e.g. deck_overhang) to additional inputs
+        if getattr(self, "_additional_inputs_dialog", None) is not None:
+            try:
+                self._additional_inputs_dialog.set_input_dictionary(self.input_dict)
+            except Exception:
+                pass
+
+        # 5. Full CAD redraw with re-derived parameters
+        if hasattr(self, "cad_comp_widget") and self.cad_comp_widget:
+            self.cad_comp_widget.update_from_osdag_inputs(self.input_dict, force=True)
+            if hasattr(self.cad_comp_widget, "cross_section_widget") and self.cad_comp_widget.cross_section_widget:
+                self.cad_comp_widget.cross_section_widget.update()
+            if hasattr(self.cad_comp_widget, "top_view_widget") and self.cad_comp_widget.top_view_widget:
+                self.cad_comp_widget.top_view_widget.update()        
             
     # Function for saving input dictionary into an OSI file
     def saveOSI_inputs(self):

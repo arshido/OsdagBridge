@@ -2,11 +2,12 @@
 Additional Inputs Widget for Highway Bridge Design
 Provides detailed input fields for manual bridge parameter definition
 """
+from __future__ import annotations
 from copy import deepcopy
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QTabBar, QLabel, QLineEdit,
-    QComboBox, QPushButton, QCheckBox, QSizePolicy,
+    QComboBox, QPushButton, QCheckBox, QRadioButton, QSizePolicy,
     QDialog, QSizePolicy, QSizeGrip,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QPoint, QEvent
@@ -57,6 +58,10 @@ class AdditionalInputs(QDialog):
  
         # Store all Compute functions to be called at Design
         self._compute_functions = []
+
+        # Modification tracking
+        self.is_modified = False
+        self._is_initializing = True
 
         self.setObjectName("AdditionalInputs")
         self.setMinimumSize(900, 520)
@@ -177,7 +182,43 @@ class AdditionalInputs(QDialog):
         # Normalize existing numeric text to 2 decimal places for consistent display
         self._normalize_numeric_texts(2)
 
+        self._wire_input_modification_signals()
+
         # self._print_widget_tree()
+
+    def set_modified(self, modified: bool = True):
+        """Update modified state and title bar asterisk."""
+        if getattr(self, "_is_initializing", False) and modified:
+            return
+        self.is_modified = modified
+        base_title = "Additional Inputs"
+        if hasattr(self, "title_bar") and self.title_bar is not None:
+            title = f"{base_title} *" if modified else base_title
+            self.title_bar.setTitle(title)
+
+    def _wire_input_modification_signals(self):
+        """Wire change listeners on all input widgets to track modifications."""
+        for le in self.findChildren(QLineEdit):
+            if not le.property("_mod_wired"):
+                le.setProperty("_mod_wired", True)
+                try:
+                    le.textEdited.connect(lambda *_: self.set_modified(True))
+                except Exception:
+                    pass
+        for cb in self.findChildren(QComboBox):
+            if not cb.property("_mod_wired"):
+                cb.setProperty("_mod_wired", True)
+                try:
+                    cb.activated.connect(lambda *_: self.set_modified(True))
+                except Exception:
+                    pass
+        for chk in self.findChildren(QCheckBox):
+            if not chk.property("_mod_wired"):
+                chk.setProperty("_mod_wired", True)
+                try:
+                    chk.clicked.connect(lambda *_: self.set_modified(True))
+                except Exception:
+                    pass
 
     # Print Additional Inputs Widget Tree--------------------------------------------
     def _print_widget_tree(self, root, indent=0):
@@ -229,22 +270,27 @@ class AdditionalInputs(QDialog):
         return super().eventFilter(obj, event)
 
     def set_input_dictionary(self, input_dict: dict):  # lifecycle: sets default/working dicts and wires END_CONNECTORS on first open
-        self.default_input_dict = input_dict
-        self.working_input_dict = deepcopy(input_dict)
+        self._is_initializing = True
+        try:
+            self.default_input_dict = input_dict
+            self.working_input_dict = deepcopy(input_dict)
 
-        self.set_defaults()
+            self.set_defaults()
 
-        self.default_input_dict.update(self.working_input_dict)
+            self.default_input_dict.update(self.working_input_dict)
 
-        self._last_good_layout = {
-            KEY_TS_GIRDER_SPACING: self.working_input_dict.get(KEY_TS_GIRDER_SPACING),
-            KEY_TS_NO_OF_GIRDERS:  self.working_input_dict.get(KEY_TS_NO_OF_GIRDERS),
-        }
+            self._last_good_layout = {
+                KEY_TS_GIRDER_SPACING: self.working_input_dict.get(KEY_TS_GIRDER_SPACING),
+                KEY_TS_NO_OF_GIRDERS:  self.working_input_dict.get(KEY_TS_NO_OF_GIRDERS),
+            }
 
-        if self.interacted_first:
-            self.interacted_first = False
-            from osdagbridge.core.bridge_types.plate_girder.ui_fields_additional_input import END_CONNECTORS
-            UIBuilder.wire_end_connectors(END_CONNECTORS, ai=self)
+            if self.interacted_first:
+                self.interacted_first = False
+                from osdagbridge.core.bridge_types.plate_girder.ui_fields_additional_input import END_CONNECTORS
+                UIBuilder.wire_end_connectors(END_CONNECTORS, ai=self)
+        finally:
+            self._is_initializing = False
+            self.set_modified(False)
 
     def set_defaults(self) -> None:  # lifecycle: populates all widgets from working_input_dict; called at init time only
         """
@@ -314,6 +360,9 @@ class AdditionalInputs(QDialog):
 
         self.working_input_dict[KEY_DESIGN_MODE] = normalized
         is_optimized = normalized == "Optimized"
+
+        if not getattr(self, "_is_initializing", False):
+            self.set_modified(True)
 
         # Sync AdaptiveWidgets (depth, flange widths, thickness fields) ---------------------------------
         from osdagbridge.desktop.ui.dialogs.additional_input.ui_builder.common_ui_builder import AdaptiveWidget
@@ -455,9 +504,11 @@ class AdditionalInputs(QDialog):
 
         if hasattr(active_tab, "reset_active_tab_defaults"):
             active_tab.reset_active_tab_defaults()
+            self.set_modified(True)
             return
         elif hasattr(active_tab, "reset_defaults"):
             active_tab.reset_defaults()
+            self.set_modified(True)
             return
 
         for widget in active_tab.findChildren(QWidget):
@@ -497,8 +548,13 @@ class AdditionalInputs(QDialog):
 
             self.working_input_dict[name] = value
 
+        self.set_modified(True)
+
     def showEvent(self, event):  # Qt event: refreshes active sub-tabs when dialog is shown or reopened
         super().showEvent(event)
+        self._wire_input_modification_signals()
+        self._is_initializing = False
+        self.set_modified(False)
         from PySide6.QtWidgets import QTabWidget
         for tab_widget in self.findChildren(QTabWidget):
             if hasattr(tab_widget, "refresh_active_tab"):
@@ -507,6 +563,9 @@ class AdditionalInputs(QDialog):
     # ── Dialog Persistence ───────────────────────────────────────────────────────
 
     def _save_inputs(self):  # on_change: validates all tabs then commits working_input_dict and emits CAD update signal
+        # Pre-save validation: Check that any active "Custom" parameter field is non-empty
+        if not self._validate_custom_inputs():
+            return
 
         # Flush the currently-displayed stiffener member's widgets before committing.
         # _save_stiffener_member_data otherwise only runs when switching *away* from a
@@ -521,6 +580,8 @@ class AdditionalInputs(QDialog):
         cad = self.findChild(CrossSectionCADWidget, KEY_TS_CAD_PREVIEW)
         if cad:
             self.update_template_page_2d_cad.emit(cad.params)
+
+        self.set_modified(False)
         
         CustomMessageBox(
             title="Saved",
@@ -528,6 +589,280 @@ class AdditionalInputs(QDialog):
             buttons=["OK"],
             dialogType=MessageBoxType.Success,
         ).exec()
+
+    # ── Pre-Save Validation & UX Polish ──────────────────────────────────────────
+
+    def _is_widget_active(self, widget: QWidget) -> bool:
+        """Check if widget is enabled, not explicitly hidden, and in an enabled tab."""
+        if widget is None:
+            return False
+        if not widget.isEnabled() or widget.isHidden():
+            return False
+        p = widget
+        while p is not None and p is not self:
+            parent = p.parent()
+            if isinstance(parent, QTabWidget):
+                idx = parent.indexOf(p)
+                if idx >= 0 and not parent.isTabEnabled(idx):
+                    return False
+            p = parent
+        return True
+
+    def get_param_display_name(self, field_id: str, widget: QWidget | None = None) -> str:
+        """Retrieve canonical parameter display name using central keys."""
+        if field_id in ADDITIONAL_INPUTS_PARAM_NAMES:
+            return ADDITIONAL_INPUTS_PARAM_NAMES[field_id]
+
+        base_id = field_id[:-6] if field_id.endswith(".value") else field_id
+        if base_id in ADDITIONAL_INPUTS_PARAM_NAMES:
+            return ADDITIONAL_INPUTS_PARAM_NAMES[base_id]
+
+        if widget is not None:
+            lbl = self.findChild(QLabel, field_id + "_label") or self.findChild(QLabel, base_id + "_label")
+            if lbl and lbl.text().strip():
+                import re
+                cleaned = re.sub(r'<[^>]+>', '', lbl.text().strip()).rstrip(':').strip()
+                if cleaned:
+                    return cleaned
+
+        return base_id.split(".")[-1].replace("_", " ").title()
+
+    def _highlight_invalid_field(self, widget: QLineEdit):
+        """Briefly highlight an invalid field with a red border."""
+        if not widget:
+            return
+        orig_style = widget.styleSheet()
+        widget.setStyleSheet("""
+            QLineEdit {
+                padding: 1px 7px;
+                border: 2px solid #F44336;
+                border-radius: 6px;
+                background-color: #FFF5F5;
+                color: #000000;
+            }
+        """)
+        reverted = [False]
+        def revert():
+            if not reverted[0]:
+                reverted[0] = True
+                try:
+                    widget.setStyleSheet(orig_style)
+                except Exception:
+                    pass
+
+        QTimer.singleShot(2500, revert)
+        try:
+            widget.textChanged.connect(lambda: revert())
+        except Exception:
+            pass
+
+    def _activate_and_focus_field(self, field_widget: QLineEdit):
+        """Auto-switch QTabWidget to the tab containing the field, set focus and highlight."""
+        p = field_widget
+        tabs_to_activate = []
+        while p is not None and p is not self:
+            parent = p.parent()
+            if isinstance(parent, QTabWidget):
+                idx = parent.indexOf(p)
+                if idx >= 0:
+                    tabs_to_activate.append((parent, idx))
+            p = parent
+
+        for tab_widget, idx in reversed(tabs_to_activate):
+            tab_widget.setCurrentIndex(idx)
+
+        field_widget.setFocus()
+        self._highlight_invalid_field(field_widget)
+
+    def _on_custom_validation_error(self, field_widget: QLineEdit, param_name: str):
+        """Handle pre-save validation failure for an empty Custom field."""
+        self._activate_and_focus_field(field_widget)
+        CustomMessageBox(
+            title="Error",
+            text=f"Error: The custom value for '{param_name}' cannot be empty.",
+            buttons=["OK"],
+            dialogType=MessageBoxType.Critical,
+        ).exec()
+
+    def _validate_custom_inputs(self) -> bool:
+        """
+        Pre-save validation: Iterates through all active tabs.
+        If any parameter has its selector set to "Custom" and its corresponding
+        QLineEdit is empty (or whitespace-only), halt the save process immediately,
+        focus and highlight the field, and show an error dialog.
+        """
+        # Strict key-driven mapping of selector -> list of (value_key, param_name)
+        custom_selectors = [
+            (KEY_CB_TYPE, [
+                (KEY_CB_WIDTH, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_CB_WIDTH, "Crash Barrier Width")),
+                (KEY_CB_HEIGHT, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_CB_HEIGHT, "Crash Barrier Height")),
+                (KEY_CB_LOAD, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_CB_LOAD, "Crash Barrier Load")),
+            ]),
+            (KEY_MD_TYPE, [
+                (KEY_MD_WIDTH, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_MD_WIDTH, "Median Width")),
+                (KEY_MD_HEIGHT, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_MD_HEIGHT, "Median Height")),
+                (KEY_MD_LOAD, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_MD_LOAD, "Median Load")),
+            ]),
+            (KEY_RL_TYPE, [
+                (KEY_RL_WIDTH, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_RL_WIDTH, "Railing Width")),
+                (KEY_RL_HEIGHT, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_RL_HEIGHT, "Railing Height")),
+            ]),
+            (KEY_RL_LOAD_MODE, [
+                (KEY_RL_LOAD_VALUE, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_RL_LOAD_VALUE, "Railing Load")),
+            ]),
+            (KEY_WC_MATERIAL, [
+                (KEY_WC_DENSITY, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_WC_DENSITY, "Wearing Course Density")),
+            ]),
+            (KEY_LL_FOOTPATH_PRESSURE_MODE, [
+                (KEY_LL_FOOTPATH_PRESSURE_VALUE, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_LL_FOOTPATH_PRESSURE_VALUE, "Footpath Pressure")),
+            ]),
+            (KEY_SL_DEAD_LOAD_MODE, [
+                (KEY_SL_DEAD_LOAD_VALUE, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_SL_DEAD_LOAD_VALUE, "Dead Load for Seismic Force")),
+            ]),
+            (KEY_SL_LIVE_LOAD_MODE, [
+                (KEY_SL_LIVE_LOAD_VALUE, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_SL_LIVE_LOAD_VALUE, "Live Load for Seismic Force")),
+            ]),
+            (KEY_WL_GUST_FACTOR_MODE, [
+                (KEY_WL_GUST_FACTOR_VALUE, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_WL_GUST_FACTOR_VALUE, "Gust Factor")),
+            ]),
+            (KEY_WL_DRAG_COEFF_MODE, [
+                (KEY_WL_DRAG_COEFF_VALUE, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_WL_DRAG_COEFF_VALUE, "Drag Coefficient")),
+            ]),
+            (KEY_WL_DRAG_COEFF_LL_MODE, [
+                (KEY_WL_DRAG_COEFF_LL_VALUE, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_WL_DRAG_COEFF_LL_VALUE, "Drag Coefficient against Live Load")),
+            ]),
+            (KEY_WL_LIFT_COEFF_MODE, [
+                (KEY_WL_LIFT_COEFF_VALUE, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_WL_LIFT_COEFF_VALUE, "Lift Coefficient")),
+            ]),
+            (KEY_WL_SUPER_AREA_ELEV_MODE, [
+                (KEY_WL_SUPER_AREA_ELEV_VALUE, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_WL_SUPER_AREA_ELEV_VALUE, "Superstructure Area in Elevation")),
+            ]),
+            (KEY_WL_SUPER_AREA_PLAIN_MODE, [
+                (KEY_WL_SUPER_AREA_PLAIN_VALUE, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_WL_SUPER_AREA_PLAIN_VALUE, "Superstructure Area in Plain")),
+            ]),
+            (KEY_WL_EXPOSED_FRONTAL_MODE, [
+                (KEY_WL_EXPOSED_FRONTAL_VALUE, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_WL_EXPOSED_FRONTAL_VALUE, "Exposed Frontal Area of Live Load")),
+            ]),
+            (KEY_WL_WIND_ECC_DECK_MODE, [
+                (KEY_WL_WIND_ECC_DECK_VALUE, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_WL_WIND_ECC_DECK_VALUE, "Wind Load Eccentricity from Top of Deck")),
+            ]),
+            (KEY_WL_WIND_LL_ECC_MODE, [
+                (KEY_WL_WIND_LL_ECC_VALUE, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_WL_WIND_LL_ECC_VALUE, "Wind on Live Load Eccentricity from Top of Deck")),
+            ]),
+            (KEY_DO_CAMBER_MODE, [
+                (KEY_DO_CAMBER_VALUE, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_DO_CAMBER_VALUE, "Camber")),
+            ]),
+            (KEY_ADD_CUSTOM_LOAD_CASE, [
+                (KEY_ADD_CUSTOM_LOAD_CASE_NAME, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_ADD_CUSTOM_LOAD_CASE_NAME, "Custom Load Case Name")),
+            ]),
+            (KEY_DESIGN_MODE, [
+                (KEY_MP_GIRDER_DEPTH, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_MP_GIRDER_DEPTH, "Total Depth")),
+                (KEY_MP_GIRDER_TOP_FLANGE_WIDTH, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_MP_GIRDER_TOP_FLANGE_WIDTH, "Width of Top Flange")),
+                (KEY_MP_GIRDER_BOTTOM_FLANGE_WIDTH, ADDITIONAL_INPUTS_PARAM_NAMES.get(KEY_MP_GIRDER_BOTTOM_FLANGE_WIDTH, "Width of Bottom Flange")),
+            ]),
+        ]
+
+        def _is_custom_value(val: str) -> bool:
+            return str(val or "").strip().lower() in {"custom", "customized"}
+
+        for sel_key, field_pairs in custom_selectors:
+            sel_widget = self.findChild(QComboBox, sel_key)
+            if sel_widget is not None:
+                if not self._is_widget_active(sel_widget):
+                    continue
+                is_custom = _is_custom_value(sel_widget.currentText())
+            else:
+                if sel_key == KEY_ADD_CUSTOM_LOAD_CASE and hasattr(self, "custom_load_case_combo"):
+                    sel_widget = self.custom_load_case_combo
+                    if not self._is_widget_active(sel_widget):
+                        continue
+                    is_custom = _is_custom_value(sel_widget.currentText())
+                else:
+                    is_custom = _is_custom_value(self.working_input_dict.get(sel_key))
+
+            if not is_custom:
+                continue
+
+            for field_key, param_name in field_pairs:
+                field_widget = self.findChild(QLineEdit, field_key)
+                if field_widget is None:
+                    if field_key == KEY_ADD_CUSTOM_LOAD_CASE_NAME and hasattr(self, "custom_load_case_name_input"):
+                        field_widget = self.custom_load_case_name_input
+                    elif sel_key == KEY_DESIGN_MODE:
+                        adaptive = self.findChild(AdaptiveWidget, field_key)
+                        if adaptive is not None:
+                            curr = adaptive.currentWidget()
+                            if isinstance(curr, QLineEdit):
+                                field_widget = curr
+
+                if field_widget is None or not self._is_widget_active(field_widget):
+                    continue
+
+                if not field_widget.text().strip():
+                    self._on_custom_validation_error(field_widget, param_name)
+                    return False
+
+        # Generic discovery pass for any other QComboBox / QRadioButton set to Custom
+        for combo in self.findChildren(QComboBox):
+            if not self._is_widget_active(combo):
+                continue
+            if _is_custom_value(combo.currentText()):
+                c_name = combo.objectName() or ""
+                if c_name.endswith(".mode"):
+                    v_key = c_name[:-5] + ".value"
+                    v_widget = self.findChild(QLineEdit, v_key)
+                    if v_widget and self._is_widget_active(v_widget) and not v_widget.text().strip():
+                        p_name = self.get_param_display_name(v_key, v_widget)
+                        self._on_custom_validation_error(v_widget, p_name)
+                        return False
+
+        for rb in self.findChildren(QRadioButton):
+            if not self._is_widget_active(rb):
+                continue
+            if rb.isChecked() and _is_custom_value(rb.text()):
+                rb_name = rb.objectName() or ""
+                v_widget = self.findChild(QLineEdit, rb_name + ".value") or self.findChild(QLineEdit, rb_name)
+                if v_widget and self._is_widget_active(v_widget) and not v_widget.text().strip():
+                    p_name = self.get_param_display_name(rb_name, v_widget)
+                    self._on_custom_validation_error(v_widget, p_name)
+                    return False
+
+        return True
+
+    # ── Dialog Close & Unsaved Changes Handling ──────────────────────────────────
+
+    def closeEvent(self, event):
+        if getattr(self, "is_modified", False):
+            res = CustomMessageBox(
+                title="Warning",
+                text="You have unsaved changes. Closing this window will discard them. Do you want to proceed?",
+                buttons=["Discard", "Cancel"],
+                dialogType=MessageBoxType.Warning,
+            ).exec()
+            if res == "Discard":
+                self.working_input_dict = deepcopy(self.default_input_dict)
+                self._is_initializing = True
+                try:
+                    self.set_defaults()
+                finally:
+                    self._is_initializing = False
+                self.set_modified(False)
+                event.accept()
+            else:
+                event.ignore()
+                return
+        else:
+            event.accept()
+
+    def reject(self):
+        self.close()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.close()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _show_validation_errors(self, errors):  # utility: displays validation error list in a warning popup
         message = "\n\n".join(f"• {err}" for err in errors)
@@ -546,6 +881,9 @@ class AdditionalInputs(QDialog):
         - QComboBox: always valid, skip validation, update dict + CAD.
         - QLineEdit: hard validation — corrects widget + input_dict if invalid, shows popup.
         """
+        if not getattr(self, "_is_initializing", False):
+            self.set_modified(True)
+
         if isinstance(widget, str):
             self._update_input_dict(key, widget)
             self._update_additional_input_cad()
@@ -584,6 +922,9 @@ class AdditionalInputs(QDialog):
         self._update_additional_input_cad()
 
     def _on_field_editing(self, current_text: str, key: str):  # on_change: soft validation while typing — updates dict/CAD only when valid, no popups
+        if not getattr(self, "_is_initializing", False):
+            self.set_modified(True)
+
         if not current_text.strip():
             self._update_input_dict(key, "")
             self._update_additional_input_cad()
